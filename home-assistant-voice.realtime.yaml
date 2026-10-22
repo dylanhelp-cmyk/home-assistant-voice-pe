@@ -1900,7 +1900,7 @@ external_components:
   #   - source: {type: local, path: esphome/components}
   - source:
       type: git
-      url: https://github.com/xandervanerven/home-assistant-voice-pe
+      url: https://github.com/dylanhelp-cmyk/home-assistant-voice-pe
       ref: main
     components: [va_client]
     refresh: 0s
@@ -2088,14 +2088,15 @@ micro_wake_word:
     gain_factor: 4
   stop_after_detection: false
   models:
-    # PERSONAL VARIANT: alexa-only start wake word (microWakeWord v2.1).
+    # PERSONAL VARIANT: alexa-only start wake word (microWakeWord v2).
     # The stock start words (okay_nabu / hey_jarvis / hey_mycroft) were
     # removed on purpose. "stop" stays — it's the reliable barge-in/interrupt
     # word, armed only while the assistant is replying (see on_phase below).
-    # kahrendt/microWakeWord redirects to the OHF-Voice org automatically.
-    - model: https://github.com/kahrendt/microWakeWord/releases/download/v2.1_models/alexa.json
+    # Use ESPHome's maintained v2 model collection; the old v2.1_models
+    # release asset is no longer available (404).
+    - model: alexa
       id: alexa
-    - model: https://github.com/kahrendt/microWakeWord/releases/download/stop/stop.json
+    - model: https://github.com/OHF-Voice/micro-wake-word/releases/download/stop/stop.json
       id: stop
       internal: true
       # The model ships with cutoff 0.5. This baked 0.4 is only the boot/quiet
@@ -2320,7 +2321,7 @@ select:
       # Sets specific wake word probabilities computed for each particular model
       # Note probability cutoffs are set as a quantized uint8 value, each comment has the corresponding floating point cutoff
       # False Accepts per Hour values are tested against all units and channels from the Dinner Party Corpus.
-      # PERSONAL VARIANT: only the alexa@v2.1 model is built in now, so the
+      # PERSONAL VARIANT: only the alexa@v2 model is built in now, so the
       # three tiers just adjust its cutoff. Cutoffs are quantized uint8
       # (round(probability * 255)); LOWER = more sensitive = more false
       # accepts. Spacing mirrors the proven okay_nabu tiers.

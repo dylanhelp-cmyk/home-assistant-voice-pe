@@ -151,8 +151,8 @@ api_key: "the-API-encryption-key-from-step-2.2"   # 44-char base64
 
 1. In ESPHome Builder, **Edit** the adopted device and **replace its entire YAML** with
    a ready-made stub from the firmware repo:
-   - DHCP: [`esphome-builder.dhcp.yaml`](https://github.com/xandervanerven/home-assistant-voice-pe/blob/main/esphome-builder.dhcp.yaml)
-   - Fixed IP: [`esphome-builder.static-ip.yaml`](https://github.com/xandervanerven/home-assistant-voice-pe/blob/main/esphome-builder.static-ip.yaml)
+   - DHCP: [`esphome-builder.dhcp.yaml`](https://github.com/dylanhelp-cmyk/home-assistant-voice-pe/blob/main/esphome-builder.dhcp.yaml)
+   - Fixed IP: [`esphome-builder.static-ip.yaml`](https://github.com/dylanhelp-cmyk/home-assistant-voice-pe/blob/main/esphome-builder.static-ip.yaml)
 
    Set `name` and `friendly_name`, and **keep** the `packages:` / `dashboard_import:`
    lines — those are what pull the full firmware from the repo. Save.
@@ -167,6 +167,19 @@ api_key: "the-API-encryption-key-from-step-2.2"   # 44-char base64
    - **After that:** **Wirelessly (OTA)** — every later flash goes over Wi-Fi.
 
 That's it — the device boots, connects to the add-on, and you're ready to talk to it.
+
+### Fixing the Alexa model download (404)
+
+The old `kahrendt/microWakeWord/releases/download/v2.1_models/alexa.json`
+release asset is no longer available. This fork uses ESPHome's maintained
+`alexa` v2 model and the canonical OHF-Voice URL for the `stop` model.
+
+If you already copied a device stub from the original repository, update both
+`packages.realtime.url` and `dashboard_import.package_import_url` to the values
+in this fork's stub above. Keep your existing device name, secrets, and any
+`va_url` or static IP settings. Then install again. The stub's `refresh: 0s`
+fetches the fixed firmware on every build; a stub still pointing at
+`xandervanerven/home-assistant-voice-pe` will continue loading the original code.
 
 ---
 
