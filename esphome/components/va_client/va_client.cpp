@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <cstdio>
 
 #include <esp_websocket_client.h>
 #include <esp_event.h>
@@ -404,6 +405,13 @@ void VaClient::on_ws_event(int32_t event_id, void *event_data) {
         ESP_LOGW(TAG, "WS disconnected (event %d)", (int) event_id);
       }
       this->ws_connected_ = false;
+      const bool was_waiting_external = this->waiting_external_chime_.exchange(false);
+      this->defer([this, was_waiting_external]() {
+        this->external_wake_gate_.cancel();
+        this->cancel_timeout("va_external_wake");
+        if (was_waiting_external)
+          this->send_interrupt();
+      });
       // Connection broke before the stability window elapsed — keep the
       // failure counter and the fired flag. A flapping link won't earn
       // a fresh chime.
@@ -420,6 +428,37 @@ void VaClient::on_ws_event(int32_t event_id, void *event_data) {
 void VaClient::handle_text_(const char *data, size_t len) {
   std::string msg(data, len);
   ESP_LOGD(TAG, "WS text: %s", msg.c_str());
+
+  if (msg.find("\"type\":\"wake_ready\"") != std::string::npos) {
+    uint32_t wake_id = 0;
+    if (!parse_uint_after_key(msg, "\"wake_id\":", wake_id))
+      return;
+    const bool ok = msg.find("\"ok\":true") != std::string::npos;
+    this->defer([this, wake_id, ok]() {
+      if (!this->ws_connected_ || !this->external_wake_gate_.complete(wake_id))
+        return;
+      this->waiting_external_chime_.store(false);
+      this->cancel_timeout("va_external_wake");
+      if (!ok) {
+        ESP_LOGW(TAG, "External wake chime failed; microphone remains closed");
+        this->send_interrupt();
+        this->set_phase_("idle");
+        return;
+      }
+      this->preroll_discard_pending_ = true;
+      if (this->external_wake_gate_.followup()) {
+        this->commit_followup_mic();
+        this->current_phase_.store(static_cast<uint8_t>(Phase::LISTENING));
+        this->fire_phase_led_("listening");
+      } else {
+        this->streaming_ = true;
+        this->set_phase_("listening");
+        this->arm_no_speech_watchdog_();
+      }
+      ESP_LOGI(TAG, "External wake chime finished; microphone open");
+    });
+    return;
+  }
 
   if (msg.find("\"type\":\"error\"") != std::string::npos) {
     ESP_LOGW(TAG, "Server reported error: %s", msg.c_str());
@@ -441,6 +480,8 @@ void VaClient::handle_text_(const char *data, size_t len) {
   }
 
   if (msg.find("\"type\":\"hello\"") != std::string::npos) {
+    this->external_audio_.store(msg.find("\"external_audio\":true") != std::string::npos);
+    ESP_LOGI(TAG, "hello: speech/chime output = %s", this->is_external_audio() ? "external speaker" : "Voice PE");
     // Handshake ack from the backend. It may carry follow-up tuning so the
     // device behaviour is configurable from the add-on (no reflash): a reconnect
     // after an add-on restart re-reads these.
@@ -708,6 +749,12 @@ const char *VaClient::phase_name_(Phase p) {
 }
 
 void VaClient::set_phase_(const std::string &phase) {
+  // A previous turn's delayed idle/listening must not open a follow-up mic
+  // while the external wake sound is playing. wake_ready owns this boundary.
+  if (this->ws_connected_ && this->waiting_external_chime_.load()) {
+    ESP_LOGD(TAG, "Ignoring phase=%s while waiting for external wake sound", phase.c_str());
+    return;
+  }
   // Don't dedupe — we want yaml-side control_leds to re-render even on
   // identical phase if other inputs (e.g. va WS connection state) have
   // changed since the last emission.
@@ -787,6 +834,10 @@ void VaClient::set_phase_(const std::string &phase) {
     this->cancel_timeout("va_no_speech");
     this->cancel_timeout("va_followup");
   } else if (phase == "thinking" || phase == "replying") {
+    // External replies have no PCM packets on this device. Mark the real
+    // replying phase so the existing stop-word guard still permits a stop.
+    if (phase == "replying" && this->is_external_audio() && this->turn_t_first_audio_out_ == 0)
+      this->turn_t_first_audio_out_ = millis();
     // Gate the mic off only once the bot actually starts speaking (`replying`).
     // With handsfree barge-in we don't gate at all (the server VAD + XMOS AEC
     // arbitrate talk-over). Crucially we do NOT gate on `thinking`: semantic_vad
@@ -935,7 +986,7 @@ void VaClient::set_phase_(const std::string &phase) {
   });
 }
 
-void VaClient::start_session() {
+void VaClient::start_session(bool play_wake_sound) {
   // Open the streaming window. on_mic_data_ will start forwarding frames to
   // the server until "phase":"idle" comes back (response.done). Without this
   // gate, OpenAI Realtime's server VAD would respond to any speech in the
@@ -972,13 +1023,12 @@ void VaClient::start_session() {
   // window; replaying it fed the chime back to OpenAI as a phantom "Au!". The
   // mic task does the actual ring reset (its sole owner) when it sees this flag.
   this->preroll_discard_pending_ = true;
-  ESP_LOGI(TAG, "start_session() — streaming on");
-  this->streaming_ = true;
+  ESP_LOGI(TAG, "start_session() — %s", this->is_external_audio() ? "waiting for external chime" : "streaming on");
+  this->streaming_ = !this->is_external_audio();
   // Tell the backend a fresh wake started (dangling-VAD guard, A). Sent AFTER
   // the residual-reply interrupt above so the backend sees interrupt → wake in
   // order. The first real mic frame for this turn doesn't flow until after this
   // returns, so the guard's "speech since wake" tracker starts clean.
-  this->send_wake_();
   // New wake word starts a fresh session — drop any pending or active
   // follow-up window from the previous turn.
   this->followup_pending_ = false;
@@ -1005,6 +1055,16 @@ void VaClient::start_session() {
   this->ws_gap_max_ms_ = 0;
   this->clipped_samples_ = 0;
   this->underrun_logged_this_turn_ = false;
+  if (this->is_external_audio()) {
+    this->begin_external_wake_(play_wake_sound, false);
+  } else {
+    this->send_wake_();
+    this->arm_no_speech_watchdog_();
+  }
+}
+
+void VaClient::arm_no_speech_watchdog_() {
+  // Watchdog starts when the mic opens, after any external wake chime.
   // Watchdog: if server doesn't hear us within kNoSpeechTimeoutMs, abort the
   // session so we're not stuck with the mic open after a misfire.
   this->set_timeout("va_no_speech", kNoSpeechTimeoutMs, [this]() {
@@ -1130,7 +1190,29 @@ void VaClient::send_mic_flush_() {
   }
 }
 
-void VaClient::send_wake_() {
+void VaClient::begin_external_wake_(bool play_wake_sound, bool followup) {
+  this->streaming_ = false;
+  this->cancel_timeout("va_no_speech");
+  this->cancel_timeout("va_followup");
+  this->cancel_timeout("va_followup_open");
+  this->waiting_external_chime_.store(true);
+  const uint32_t wake_id = this->external_wake_gate_.begin(followup);
+  this->send_wake_(play_wake_sound);
+  this->set_timeout("va_external_wake", 20000, [this, wake_id]() {
+    if (!this->external_wake_gate_.pending(wake_id))
+      return;
+    ESP_LOGW(TAG, "External wake acknowledgement timed out; microphone remains closed");
+    this->send_interrupt();
+    this->set_phase_("idle");
+  });
+}
+
+void VaClient::begin_external_followup(bool play_wake_sound) {
+  if (this->is_external_audio() && this->followup_armed_)
+    this->begin_external_wake_(play_wake_sound, true);
+}
+
+void VaClient::send_wake_(bool play_wake_sound) {
   // Tell the backend a fresh wake started (dangling-VAD guard, A). Until the
   // user actually speaks this turn, OpenAI's server VAD can still fire an
   // end-of-turn for a PREVIOUS utterance that never closed (the reply gated the
@@ -1138,9 +1220,16 @@ void VaClient::send_wake_() {
   // turn. The backend uses this signal to suppress that stale thinking + cancel
   // the racing response. Sent on every start_session(); old backends ignore it.
   if (this->ws_connected_ && this->ws_handle_ != nullptr) {
-    const char msg[] = "{\"type\":\"wake\"}";
+    char msg[128];
+    if (this->is_external_audio()) {
+      std::snprintf(msg, sizeof(msg),
+                    "{\"type\":\"wake\",\"external_wake\":true,\"wake_id\":%u,\"wake_sound\":%s}",
+                    (unsigned) this->external_wake_gate_.id(), play_wake_sound ? "true" : "false");
+    } else {
+      std::snprintf(msg, sizeof(msg), "{\"type\":\"wake\"}");
+    }
     auto handle = static_cast<esp_websocket_client_handle_t>(this->ws_handle_);
-    esp_websocket_client_send_text(handle, msg, sizeof(msg) - 1, portMAX_DELAY);
+    esp_websocket_client_send_text(handle, msg, std::strlen(msg), portMAX_DELAY);
     ESP_LOGI(TAG, "wake — sent {\"type\":\"wake\"} (dangling-VAD guard)");
   }
 }
@@ -1181,11 +1270,15 @@ void VaClient::commit_followup_mic() {
       ESP_LOGI(TAG, "follow-up window expired — mic streaming off");
       this->streaming_ = false;
       this->send_mic_flush_();  // drop any uncommitted partial utterance
+      this->fire_phase_led_("idle");
     }
   });
 }
 
 void VaClient::send_interrupt() {
+  this->waiting_external_chime_.store(false);
+  this->external_wake_gate_.cancel();
+  this->cancel_timeout("va_external_wake");
   // Best-effort cancel to the backend — ONLY if the socket is alive. The local
   // cleanup below must ALWAYS run: returning early on a dead socket (the old
   // behaviour) left streaming_ on, the PSRAM ring full and the follow-up timers
@@ -1247,3 +1340,4 @@ void VaClient::send_interrupt() {
 
 }  // namespace va_client
 }  // namespace esphome
+

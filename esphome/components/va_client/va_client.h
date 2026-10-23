@@ -1,4 +1,5 @@
 #pragma once
+#include "external_wake_gate.h"
 
 #include "esphome/core/component.h"
 #include "esphome/components/microphone/microphone.h"
@@ -63,7 +64,9 @@ class VaClient : public Component {
   float get_setup_priority() const override { return setup_priority::AFTER_WIFI; }
 
   // YAML-callable actions.
-  void start_session();
+  void start_session(bool play_wake_sound = true);
+  bool is_external_audio() const { return this->external_audio_.load(); }
+  void begin_external_followup(bool play_wake_sound = true);
   void send_interrupt();
   // Called from yaml's on_followup_opened automation AFTER the chime has
   // finished announcing through the speaker (wait_until !is_announcing +
@@ -98,7 +101,9 @@ class VaClient : public Component {
   // dangling-VAD guard: a server-VAD end-of-turn before the user speaks is a
   // stale pre-wake segment → backend suppresses its thinking + cancels its
   // garbage response. Sent on every start_session(); old backends ignore it.
-  void send_wake_();
+  void send_wake_(bool play_wake_sound = true);
+  void begin_external_wake_(bool play_wake_sound, bool followup);
+  void arm_no_speech_watchdog_();
   // Mic pre-roll helper (mic-task only, no lock). push appends to the rolling
   // ring while the session is closed; the ring is DISCARDED (not replayed) on
   // session open — see preroll_discard_pending_.
@@ -188,6 +193,9 @@ class VaClient : public Component {
   //   - between wake-word start_session() and "listening"/"thinking"
   //   - and again after "idle" for kFollowupMs (in case AI asked a question)
   bool streaming_{false};
+  std::atomic<bool> external_audio_{false};
+  std::atomic<bool> waiting_external_chime_{false};
+  ExternalWakeGate external_wake_gate_;
   // Handsfree barge-in toggle, set from yaml (`barge_in:`). See set_barge_in().
   bool barge_in_{true};
   // Set on phase=idle when there's still TTS audio queued — we can't open
@@ -415,3 +423,4 @@ class VaClient : public Component {
 
 }  // namespace va_client
 }  // namespace esphome
+
