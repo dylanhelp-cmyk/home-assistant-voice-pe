@@ -1,103 +1,41 @@
-# Home Assistant Voice PE — OpenAI Realtime 2 fork
+# Home Assistant Voice PE — GPT-Live firmware 2.0.0
 
-> [!IMPORTANT]
-> **This is 1 of 2 repos — you need both halves.** This repo is the **device
-> firmware**; on its own it does nothing. It streams audio to a backend add-on that
-> runs the OpenAI Realtime session and controls Home Assistant. You must set up both:
-> - 🔌 **Device firmware** (this repo) — flashed onto the Voice PE
-> - 🧠 **Backend add-on** → **[dylanhelp-cmyk/ha-openai-realtime](https://github.com/dylanhelp-cmyk/ha-openai-realtime)** (runs in Home Assistant)
->
-> 📖 New here? The full **[INSTALL guide](INSTALL.md)** sets up both halves, step by step.
+This fork now provides greeting-first GPT-Live firmware. Wake opens microphone streaming immediately and asks the backend to start a conversation. The backend streams your configured greeting; no wake chime or fixed wake delay is played.
 
-> **Customized fork** of `maxmaxme/home-assistant-voice-pe` (itself a fork of
-> `esphome/home-assistant-voice-pe`). The Voice PE runs as a **thin client**: it
-> streams microphone audio over a plain WebSocket to a backend add-on, which runs
-> an **OpenAI Realtime API** session (`gpt-realtime-2`) for speech-to-speech and
-> controls Home Assistant through the official
-> **[Home Assistant MCP Server](https://www.home-assistant.io/integrations/mcp_server/)**
-> integration. There is no Home Assistant `voice_assistant` pipeline on the audio
-> path — STT, TTS and the LLM all live in the Realtime session inside the add-on.
->
-> The firmware config is [`home-assistant-voice.realtime.yaml`](home-assistant-voice.realtime.yaml).
-> You don't paste it directly — you adopt it via a tiny per-device stub
-> ([`esphome-builder.dhcp.yaml`](esphome-builder.dhcp.yaml)) that pulls it as a remote package,
-> so updates are **one click** in the ESPHome dashboard (see Setup).
+Update the matching [GPT-Live add-on](https://github.com/dylanhelp-cmyk/ha-openai-realtime) to **1.0.0** and read its migration guide before flashing this firmware. The former `home-assistant-voice.realtime.yaml` package is a compatibility entry point to `home-assistant-voice.live.yaml`, so existing device substitutions and your Hey Jarvis `!extend alexa` override remain valid. Keep your working `va_url` and device port.
 
-## What this fork changes vs. upstream
+The backend controls gated/full-duplex capture, idle expiry and speaker routing. Stop, centre-button cancellation, hardware/software mute and disconnect close microphone capture locally. Wake-generation IDs on controls and PCM packets prevent stale messages/audio from reopening or contaminating a newer conversation. The persistent device WebSocket does not itself start a paid GPT-Live session.
 
-- **Custom `va_client` component** replaces the stock `voice_assistant`
-  component: a thin WebSocket client (mic up / speaker down + an idle → listening
-  → thinking → replying phase/LED state machine). All the voice intelligence
-  runs in the backend add-on, not on the device.
-- **One-click updates**: instead of pasting the whole config, you adopt a tiny
-  per-device stub that pulls the firmware from this repo as a remote ESPHome
-  `packages:` include. When a new version ships, the ESPHome dashboard shows
-  "Update available" — one click recompiles with the latest. No local checkout,
-  no tokens (this repo is public).
-- **"stop" word + button interrupt**: say *"stop"* while the assistant is
-  talking, or press the center button, to cancel the reply. This is the reliable
-  way to interrupt.
-- **Conversational, with online answers**: because the brain is `gpt-realtime-2`
-  in the backend, you get a natural back-and-forth — and with web search enabled it
-  can look things up online (weather, news, facts), not just control your devices.
+Both code updates are prepared on `gpt-live-redesign` branches. Merge both pull requests before updating through the normal app/ESPHome interfaces; the package's component reference uses `main`. Nothing is installed or flashed by these repository changes.
 
-## Setup (ESPHome Builder)
+The hardware configuration, LEDs, local volume, mute/error feedback and wake sensitivity are retained. Local wake-chime handling, Realtime turn/VAD gates, follow-up timers, dead microphone pre-roll, and external chime acknowledgements are removed from this component. Remote model access and real speaker latency/echo still need testing on the installation.
 
-1. Install and configure the **OpenAI Realtime 2 Voice Agent** add-on from
-   [dylanhelp-cmyk/ha-openai-realtime](https://github.com/dylanhelp-cmyk/ha-openai-realtime)
-   (sets your OpenAI API key, the model, and the Home Assistant MCP connection).
-2. In **Builder → Secrets**, add the keys from
-   [`secrets.yaml.example`](secrets.yaml.example): `wifi_ssid`, `wifi_password`,
-   `ota_password`, `api_key` (plus `static_ip`/`gateway`/`subnet`/`dns1`/`dns2`
-   only if you want a fixed IP).
-3. Create a new device in the dashboard and replace its YAML with a ready-made
-   stub — [`esphome-builder.dhcp.yaml`](esphome-builder.dhcp.yaml) for DHCP, or
-   [`esphome-builder.static-ip.yaml`](esphome-builder.static-ip.yaml) for a fixed IP.
-   Set `name`/`friendly_name` and keep the `packages:`/`dashboard_import:` lines.
-   Optionally override the `va_url` substitution if your add-on isn't at
-   `ws://homeassistant.local:8080/`.
-4. **Install** once (USB, then wireless thereafter). The device adopts the
-   firmware and connects to the add-on.
+## Existing ESPHome device stub
 
-After that, when a new firmware version is released the dashboard shows
-**"Update available"** for the device — click it to pull the latest config and
-re-flash. No more copy-pasting.
+Keep your existing configuration. A package reference to the old `.realtime.yaml` file will include the new package after merge. If you prefer the explicit new filename:
 
-## External speaker and wake chime (firmware 1.3.0+)
+```yaml
+packages:
+  voice:
+    url: https://github.com/dylanhelp-cmyk/home-assistant-voice-pe
+    ref: main
+    files: [home-assistant-voice.live.yaml]
+    refresh: 0s
 
-Use backend add-on **0.7.1+** from
-[dylanhelp-cmyk/ha-openai-realtime](https://github.com/dylanhelp-cmyk/ha-openai-realtime).
-Set `tts_output: media_player` and `tts_media_player` to your Home Assistant
-speaker entity in the add-on, then save and restart it. Install this firmware
-through ESPHome Builder without replacing your per-device YAML or secrets.
-Keep your working `va_url` and Hey Jarvis model override.
+# Preserve your own working IP/port, API encryption key and Wi-Fi secrets.
+substitutions:
+  va_url: ws://192.168.1.56:18081/
 
-The backend tells the firmware which output is selected. With an external
-player, the normal wake-word and center-button wake sounds move to that player,
-alongside the spoken reply. The microphone stays closed during the remote
-chime and opens only after its completion. Button cancel, mute, timeout, disconnect,
-and a newer wake invalidate the pending acknowledgement. The Wake sound
-switch still controls whether a wake-word chime plays.
+micro_wake_word:
+  models:
+    - id: !extend alexa
+      model: hey_jarvis
+```
 
-The existing stop-word guard also recognises external replies, which have no
-incoming PCM on the Voice PE. Switching the add-on back to `voice_pe` restores
-normal local playback. Older backends omit the external-output flag and retain
-the original device behavior.
+This is a package excerpt, not a replacement for your complete device YAML. The internal `alexa` ID is deliberately retained for the existing sensitivity control.
 
-## Known limitations
+## Validation
 
-- **No voice timers or alarms yet** — every other Assist action (lights, switches,
-  scenes, climate) and online questions work.
-- **A brief reconnect about once an hour** (OpenAI's 60-minute session cap; the
-  add-on refreshes proactively during a quiet moment, so it rarely interrupts).
-- **Rarely, the assistant may stop itself** on a word in its own reply that sounds
-  like "stop" — just ask again.
-- **Using "stop":** interrupts the assistant *while it's speaking* (during a reply
-  or the short listening window right after one); it has no effect before it has
-  started answering.
+Host state tests cover Stop/mute gating, disconnect, unsupported backend and stale wake IDs. ESPHome validation/source generation uses a local component override and the Hey Jarvis extension. Compile tests never upload to hardware.
 
----
-
-Based on the ESPHome source of the [Home Assistant Voice: Preview Edition](https://www.home-assistant.io/voice-pe/).
-See [the upstream documentation](https://voice-pe.home-assistant.io/) for hardware setup and troubleshooting.
-
+The original stock hardware sources remain in the repository for provenance; the active custom package is `.live.yaml`.

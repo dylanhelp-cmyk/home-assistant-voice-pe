@@ -1,0 +1,14 @@
+name: Test GPT-Live device state
+on:
+  pull_request:
+  push:
+    branches: [main, gpt-live-redesign]
+permissions:
+  contents: read
+jobs:
+  state:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: g++ -std=c++17 -Wall -Wextra -Werror tests/test_live_state.cpp -o /tmp/live-state
+      - run: /tmp/live-state
