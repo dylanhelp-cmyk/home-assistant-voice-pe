@@ -108,7 +108,6 @@ logger:
   logs:
     sensor: WARN  # avoids logging debug sensor updates
 
-
 ota:
   - platform: esphome
     id: ota_esphome
@@ -1407,7 +1406,6 @@ script:
     then:
       - lambda: 'id(is_timer_active) = false;  // TODO va-direct: no timer API on va_client yet'
 
-
 i2s_audio:
   - id: i2s_output
     i2s_lrclk_pin:
@@ -1540,7 +1538,6 @@ media_source:
     id: sendspin_media_source
     fixed_delay: 480 microseconds  # The AIC3204 DAC used, as configured, on the VPE delays audio by 480 microseconds
 
-
 voice_kit:
   id: voice_kit_component
   i2c_id: internal_i2c
@@ -1568,7 +1565,6 @@ external_components:
 time:
   - platform: sntp
     id: sntp_time
-
 
 va_client:
   id: va
@@ -1658,7 +1654,6 @@ select:
         } else if (x == "Very sensitive") {
           id(alexa).set_probability_cutoff(140);   // ~0.55
         }
-
 
 button:
   - platform: factory_reset
