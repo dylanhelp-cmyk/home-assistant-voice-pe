@@ -1,5 +1,15 @@
 # Changelog
 
+## 2.0.0 — GPT-Live protocol
+
+- Open microphone capture at wake; no local/external wake chime and no fixed wake delay.
+- Replace Realtime VAD/follow-up state handling with explicit backend microphone controls and session termination.
+- Tag controls and PCM with a wake generation, ignoring stale controls/audio after Stop or another wake.
+- Preserve microphone conversion, PSRAM speaker buffering, volume, cold-start prime, hardware mute and failure feedback.
+- Keep `.realtime.yaml` as a compatibility include for `.live.yaml`, retaining Hey Jarvis overrides and device substitutions.
+- Requires GPT-Live add-on 1.0.0. Builds do not install or flash hardware.
+
+
 ## 1.3.0
 
 - Support external wake chimes with backend add-on 0.7.1+. Wake words and the
